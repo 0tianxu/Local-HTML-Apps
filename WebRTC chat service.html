@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebRTC Chat Service</title>
+    <title>wsg big teach?</title>
     <style>
         :root {
             --bg-color: #f5f7fa;
@@ -121,7 +121,6 @@
             transition: background 0.3s; 
         }
 
-        /* Snow Overlay Fix */
         #snow-canvas {
             position: fixed;
             top: 0;
@@ -143,7 +142,6 @@
             transition: background 0.3s; 
         }
         
-        /* Sidebar layout */
         .sidebar { 
             width: 280px; 
             background: var(--sidebar-bg); 
@@ -167,7 +165,6 @@
         
         .settings-section { display: flex; flex-direction: column; gap: 6px; }
 
-        /* Sleek Dropdown Styling */
         .theme-select { 
             width: 100%; 
             padding: 10px 36px 10px 12px; 
@@ -221,7 +218,6 @@
         .toggle-row { display: flex; align-items: center; justify-content: space-between; font-size: 13px; color: var(--text-color); font-weight: 500; }
         .toggle-row input[type="checkbox"] { cursor: pointer; width: 16px; height: 16px; accent-color: #3b82f6; }
 
-        /* Channel List UI */
         .channel-list { display: flex; flex-direction: column; gap: 4px; }
         .channel-item { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text-muted); transition: all 0.15s ease; }
         .channel-item:hover { background: var(--channel-hover); color: var(--text-color); }
@@ -235,11 +231,9 @@
         .channel-btn { font-size: 12px; background: transparent; border: none; color: var(--text-muted); cursor: pointer; padding: 4px 6px; border-radius: 4px; transition: background 0.15s; }
         .channel-btn:hover { background: rgba(0, 0, 0, 0.08); color: var(--text-color); }
 
-        /* Guide Frame */
         .guide-box { font-size: 13px; line-height: 1.5; color: var(--text-color); background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.15); border-left: 4px solid #3b82f6; padding: 12px; border-radius: 6px; }
         .guide-box h4 { margin: 0 0 6px 0; font-weight: 600; font-size: 13px; color: var(--channel-active-text); }
 
-        /* Chat Pane */
         .main-chat-pane { flex-grow: 1; background: var(--chat-pane-bg); display: flex; flex-direction: column; height: 100vh; }
         .chat-header { height: 56px; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; padding: 0 24px; flex-shrink: 0; background: var(--sidebar-bg); }
         .chat-header .title { font-weight: 600; font-size: 16px; display: flex; align-items: center; gap: 6px; color: var(--text-color); }
@@ -275,6 +269,7 @@
         .hidden { display: none !important; }
         .status-dot { width: 8px; height: 8px; background: #747f8d; border-radius: 50%; display: inline-block; }
         .status-dot.online { background: #23a55a; box-shadow: 0 0 8px #23a55a; }
+        .status-dot.connecting { background: #f59e0b; box-shadow: 0 0 8px #f59e0b; }
     </style>
 </head>
 <body>
@@ -286,6 +281,14 @@
             <div class="settings-section">
                 <h3>My Identity</h3>
                 <input type="text" id="username-input" class="sidebar-input" placeholder="Guest" value="Guest">
+            </div>
+
+            <div class="settings-section">
+                <h3>Network Mode</h3>
+                <div class="toggle-row">
+                    <span>Use STUN Servers</span>
+                    <input type="checkbox" id="stun-toggle" checked title="Enable to allow connection across different Wi-Fi networks">
+                </div>
             </div>
 
             <div class="settings-section">
@@ -313,8 +316,8 @@
             </div>
             
             <div class="guide-box">
-                <h4>📋 System Routing:</h4>
-                <p>Each room slot operates its own unique direct connection string logic.</p>
+                <h4>📋 Network Note:</h4>
+                <p>Turn STUN off for strict offline/LAN mode, or turn STUN on if connecting over different Wi-Fi networks.</p>
             </div>
         </div>
 
@@ -373,8 +376,6 @@
     </div>
 
     <script>
-        // --- WebRTC Logic ---
-        const config = { iceServers: [] };
         let activeChannelIndex = 0;
 
         let channelNames = JSON.parse(localStorage.getItem('p2p_chan_names')) || ["default", "default 2", "default 3"];
@@ -382,6 +383,22 @@
 
         let activePeers = [null, null, null];
         let activeChannelsData = [null, null, null];
+        let heartbeatTimers = [null, null, null];
+        let disconnectTimeoutTimers = [null, null, null];
+
+        // Dynamic Configuration Generator
+        function getRTCConfig() {
+            const useStun = document.getElementById('stun-toggle').checked;
+            if (useStun) {
+                return {
+                    iceServers: [
+                        { urls: "stun:stun.l.google.com:19302" },
+                        { urls: "stun:stun1.l.google.com:19302" }
+                    ]
+                };
+            }
+            return { iceServers: [] }; // Pure Serverless / Local Mode
+        }
 
         function changeTheme(themeName) {
             if (themeName === 'light') document.documentElement.removeAttribute('data-theme');
@@ -480,11 +497,37 @@
             document.getElementById('step-1').classList.add('hidden');
             document.getElementById('step-2').classList.remove('hidden');
             
-            if (activePeers[activeChannelIndex]) activePeers[activeChannelIndex].close();
+            if (activePeers[activeChannelIndex]) {
+                clearInterval(heartbeatTimers[activeChannelIndex]);
+                clearTimeout(disconnectTimeoutTimers[activeChannelIndex]);
+                activePeers[activeChannelIndex].close();
+            }
 
+            // Fetches configuration depending on whether STUN toggle is checked or unchecked
+            const config = getRTCConfig();
             const pc = new RTCPeerConnection(config);
             activePeers[activeChannelIndex] = pc;
             const contextSlotIndex = activeChannelIndex;
+
+            // Soft-reconnection delay logic
+            pc.oniceconnectionstatechange = () => {
+                if (pc.iceConnectionState === 'disconnected') {
+                    if (contextSlotIndex === activeChannelIndex) {
+                        document.getElementById('header-status').innerHTML = ' — <span class="status-dot connecting"></span> Reconnecting...';
+                    }
+                    clearTimeout(disconnectTimeoutTimers[contextSlotIndex]);
+                    disconnectTimeoutTimers[contextSlotIndex] = setTimeout(() => {
+                        if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
+                            if (activeChannelsData[contextSlotIndex]) activeChannelsData[contextSlotIndex].close();
+                        }
+                    }, 6000);
+                } else if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+                    clearTimeout(disconnectTimeoutTimers[contextSlotIndex]);
+                    if (contextSlotIndex === activeChannelIndex) {
+                        document.getElementById('header-status').innerHTML = ' — <span class="status-dot online"></span> Connected';
+                    }
+                }
+            };
 
             if (hostFlag) {
                 document.getElementById('joiner-view').classList.add('hidden');
@@ -546,6 +589,17 @@
         function bindChannelEvents(channel, slotIndex) {
             channel.onopen = () => {
                 renderChannelsList();
+                clearTimeout(disconnectTimeoutTimers[slotIndex]);
+
+                // Internal heartbeat (P2P ping) to keep background tabs alive
+                // Does NOT require external servers!
+                clearInterval(heartbeatTimers[slotIndex]);
+                heartbeatTimers[slotIndex] = setInterval(() => {
+                    if (channel.readyState === 'open') {
+                        channel.send(JSON.stringify({ _type: 'ping' }));
+                    }
+                }, 5000);
+
                 if (slotIndex === activeChannelIndex) {
                     document.getElementById('step-2').classList.add('hidden');
                     document.getElementById('step-3').classList.remove('hidden');
@@ -555,6 +609,7 @@
             };
 
             channel.onclose = () => {
+                clearInterval(heartbeatTimers[slotIndex]);
                 renderChannelsList();
                 if (slotIndex === activeChannelIndex) switchChannel(activeChannelIndex);
             };
@@ -562,6 +617,8 @@
             channel.onmessage = e => {
                 try {
                     const data = JSON.parse(e.data);
+                    if (data && data._type === 'ping') return; // Silence internal keep-alive pings
+
                     if (!chatDatabase[slotIndex]) chatDatabase[slotIndex] = [];
                     
                     chatDatabase[slotIndex].push({ text: data.text, user: data.user });
@@ -617,7 +674,7 @@
             alert("Token copied successfully.");
         }
 
-        // --- Working Fixed Snow Canvas System ---
+        // --- Canvas Snow Animation ---
         const canvas = document.getElementById('snow-canvas');
         const ctx = canvas.getContext('2d');
         let snowActive = false;
@@ -648,7 +705,6 @@
 
         function drawParticles() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-            
             const snowColorStyle = getComputedStyle(document.documentElement).getPropertyValue('--snow-color').trim() || 'rgba(255, 255, 255, 0.8)';
 
             particles.forEach(p => {
